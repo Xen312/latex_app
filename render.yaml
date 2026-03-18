@@ -2,7 +2,7 @@ services:
   - type: web
     name: latex-ocr-backend
     runtime: python
-    buildCommand: apt-get install -y tesseract-ocr texlive-latex-base texlive-fonts-recommended && pip install -r backend/requirements.txt
+    buildCommand: bash build.sh
     startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: GROQ_API_KEY
