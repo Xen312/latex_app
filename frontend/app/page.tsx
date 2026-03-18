@@ -95,7 +95,7 @@ export default function Home() {
     const formData = new FormData();
     formData.append("file", file);
 
-    const res = await fetch("http://10.224.126.13:8000/upload", {
+    const res = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/upload`, {
       method: "POST",
       body: formData,
     });
@@ -115,7 +115,7 @@ export default function Home() {
     setCompileError([]);
     setPdfUrl(null);
 
-    const res = await fetch("http://10.224.126.13:8000/compile", {
+    const res = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/compile`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ latex: latexCode }),

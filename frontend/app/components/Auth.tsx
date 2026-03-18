@@ -12,7 +12,7 @@ export default function Auth({ user, onAuthChange }: AuthProps) {
     await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: "http://localhost:3000",
+        redirectTo: process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000",
       },
     });
   }
