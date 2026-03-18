@@ -28,11 +28,13 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000",
-                   "https://latexocrapp.vercel.app"
-                ],
+    allow_origins=[
+        "http://localhost:3000",
+        "https://latexocr-d6pvvxdn0-xen312s-projects.vercel.app",
+    ],
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "Access-Control-Allow-Origin"],
+    allow_credentials=True,
 )
 
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
