@@ -1,5 +1,6 @@
 from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+import re
 from fastapi.responses import Response
 import pytesseract
 from PIL import Image
@@ -30,11 +31,11 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        "https://latexocr-d6pvvxdn0-xen312s-projects.vercel.app",
+        "https://latexocr.vercel.app",
     ],
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type", "Access-Control-Allow-Origin"],
-    allow_credentials=True,
+    allow_headers=["Content-Type"],
 )
 
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
