@@ -15,7 +15,8 @@ import {
 import { supabase } from "@/lib/supabase";
 import Auth from "./components/Auth";
 import History from "./components/History";
-import PdfViewer from "./components/PdfViewer";
+import dynamic from "next/dynamic";
+const PdfViewer = dynamic(() => import("./components/PdfViewer"), { ssr: false });
 
 type Tab = "preview" | "latex";
 
