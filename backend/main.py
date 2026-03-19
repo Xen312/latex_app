@@ -1,27 +1,21 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
-import re
-from fastapi.responses import Response
-import pytesseract
-from PIL import Image
+from fastapi.responses import Response, JSONResponse
 from groq import Groq
 from dotenv import load_dotenv
+from PIL import Image
+from datetime import datetime, timedelta
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+import pytesseract
 import base64
 import io
 import subprocess
 import tempfile
 import os
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
+import json
 import hashlib
-from functools import lru_cache
-
-# Simple in-memory cache: {latex_hash: pdf_bytes}
-pdf_cache: dict = {}
-MAX_CACHE_SIZE = 50  # Store max 50 compiled PDFs
-
-def get_cache_key(latex_code: str) -> str:
-    return hashlib.md5(latex_code.encode()).hexdigest()
+import platform
 
 load_dotenv()
 
@@ -34,16 +28,36 @@ app.add_middleware(
     allow_headers=["Content-Type"],
 )
 
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+@app.middleware("http")
+async def add_cors_on_error(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    return response
 
+# Tesseract path for Windows only
+if platform.system() == "Windows":
+    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
+# Groq client
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_API_KEY:
     raise ValueError("GROQ_API_KEY not found in .env file!")
 groq_client = Groq(api_key=GROQ_API_KEY)
 
+# File upload settings
 ALLOWED_TYPES = {"image/jpeg", "image/png", "image/jpg", "image/webp", "image/bmp"}
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
+# PDF cache
+pdf_cache: dict = {}
+MAX_CACHE_SIZE = 50
+
+# Rate limiter
+rate_limit_store: dict = defaultdict(list)
+RATE_LIMIT = 10
+RATE_WINDOW = 3600
+
+# Dangerous LaTeX commands
 DANGEROUS_COMMANDS = [
     "\\write18",
     "\\input",
@@ -54,24 +68,15 @@ DANGEROUS_COMMANDS = [
     "\\immediate",
 ]
 
-def sanitize_latex(latex_code: str) -> tuple[bool, str]:
-    for cmd in DANGEROUS_COMMANDS:
-        if cmd in latex_code:
-            return False, f"Dangerous command detected: {cmd}"
-    return True, ""
-
+# Outdated packages
 OUTDATED_PACKAGES = {
-    # Graphics
     "graphics": "graphicx",
     "epsfig": "graphicx",
     "psfig": "graphicx",
     "epsf": "graphicx",
-    # Spacing
     "doublespace": "setspace",
     "spacing": "setspace",
-    # Headers
     "fancyheadings": "fancyhdr",
-    # Fonts
     "t1enc": "fontenc",
     "pslatex": "mathptmx",
     "palatino": "mathpazo",
@@ -81,17 +86,12 @@ OUTDATED_PACKAGES = {
     "newcent": "mathptmx",
     "bookman": "mathptmx",
     "charter": "mathptmx",
-    # Encoding
     "isolatin1": "inputenc",
     "isolatin": "inputenc",
     "umlaut": "inputenc",
-    # Math
     "amsfonts": "amssymb",
-    "eqnarray": "amsmath (use align instead)",
-    # Tables
     "supertabular": "longtable",
     "hhline": "booktabs",
-    # Misc
     "a4": "geometry",
     "a4wide": "geometry",
     "fullpage": "geometry",
@@ -104,8 +104,92 @@ OUTDATED_PACKAGES = {
     "scrpage2": "scrlayer-scrpage",
     "mathpple": "mathpazo",
     "utopia": "fourier",
-    "fourier": "fourier",
 }
+
+
+def get_cache_key(latex_code: str) -> str:
+    return hashlib.md5(latex_code.encode()).hexdigest()
+
+
+def is_rate_limited(ip: str) -> tuple[bool, int]:
+    now = datetime.now()
+    window_start = now - timedelta(seconds=RATE_WINDOW)
+    rate_limit_store[ip] = [
+        t for t in rate_limit_store[ip]
+        if t > window_start
+    ]
+    requests_made = len(rate_limit_store[ip])
+    if requests_made >= RATE_LIMIT:
+        oldest = rate_limit_store[ip][0]
+        retry_after = int((oldest + timedelta(seconds=RATE_WINDOW) - now).total_seconds())
+        return True, retry_after
+    rate_limit_store[ip].append(now)
+    return False, 0
+
+
+def sanitize_latex(latex_code: str) -> tuple[bool, str]:
+    for cmd in DANGEROUS_COMMANDS:
+        if cmd in latex_code:
+            return False, f"Dangerous command detected: {cmd}"
+    return True, ""
+
+
+def parse_latex_errors(stdout: str) -> list:
+    errors = []
+    lines = stdout.split('\n')
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        if line.startswith('!'):
+            message = line[1:].strip()
+            error_line = None
+            context = ""
+            for j in range(i + 1, min(i + 15, len(lines))):
+                next_line = lines[j].strip()
+                if next_line.startswith('l.'):
+                    parts = next_line.split(' ', 1)
+                    error_line = parts[0][2:]
+                    context = parts[1].strip() if len(parts) > 1 else ""
+                    break
+            errors.append({
+                "message": message,
+                "line": error_line,
+                "context": context
+            })
+        i += 1
+    return errors
+
+
+def check_latex_warnings(tex_file: str) -> list:
+    warnings = []
+    try:
+        result = subprocess.run(
+            ["chktex", "-q", "-wall", tex_file],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        output = result.stdout + result.stderr
+        for line in output.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(':')
+            if len(parts) >= 4:
+                try:
+                    line_num = parts[1].strip()
+                    message = ':'.join(parts[3:]).strip()
+                    warnings.append({
+                        "message": message,
+                        "line": line_num,
+                        "context": ""
+                    })
+                except:
+                    continue
+    except Exception:
+        pass  # chktex not available on server — skip silently
+    return warnings
+
 
 def check_outdated_packages(latex_code: str) -> list:
     warnings = []
@@ -117,70 +201,26 @@ def check_outdated_packages(latex_code: str) -> list:
                     "line": str(i),
                     "context": line.strip()
                 })
-    return warnings
-
-def check_latex_warnings(tex_file: str) -> list:
-    warnings = []
-    
-    result = subprocess.run(
-        ["chktex", "-q", "-wall", tex_file],
-        capture_output=True,
-        text=True
-    )
-    
-    output = result.stdout + result.stderr
-    
-    for line in output.split('\n'):
-        line = line.strip()
-        if not line:
-            continue
-            
-        # chktex format: filename:line:col: type num: message
-        parts = line.split(':')
-        if len(parts) >= 4:
-            try:
-                line_num = parts[1].strip()
-                message = ':'.join(parts[3:]).strip()
-                warnings.append({
-                    "message": message,
-                    "line": line_num,
-                    "context": ""
-                })
-            except:
-                continue
-    
-    return warnings
-
-def parse_latex_errors(stdout: str) -> list:
-    errors = []
-    lines = stdout.split('\n')
-
-    i = 0
-    while i < len(lines):
-        line = lines[i].strip()
-
-        if line.startswith('!'):
-            message = line[1:].strip()
-            error_line = None
-            context = ""
-
-            for j in range(i + 1, min(i + 15, len(lines))):
-                next_line = lines[j].strip()
-                if next_line.startswith('l.'):
-                    parts = next_line.split(' ', 1)
-                    error_line = parts[0][2:]
-                    context = parts[1].strip() if len(parts) > 1 else ""
-                    break
-
-            errors.append({
-                "message": message,
-                "line": error_line,
-                "context": context
+        if '\\includegraphics[' in line and '][' in line:
+            warnings.append({
+                "message": "Wrong \\includegraphics syntax — use {filename} not [filename]",
+                "line": str(i),
+                "context": line.strip()
             })
+        if '$$' in line:
+            warnings.append({
+                "message": "Avoid '$$' — use \\[ ... \\] for display math instead",
+                "line": str(i),
+                "context": line.strip()
+            })
+    if '\\documentclass' not in latex_code:
+        warnings.append({
+            "message": "Missing \\documentclass — document may not compile correctly",
+            "line": "1",
+            "context": ""
+        })
+    return warnings
 
-        i += 1
-
-    return errors
 
 def get_tesseract_confidence(image: Image.Image) -> float:
     data = pytesseract.image_to_data(
@@ -195,6 +235,7 @@ def get_tesseract_confidence(image: Image.Image) -> float:
     if not confidences:
         return 0.0
     return sum(confidences) / len(confidences)
+
 
 def groq_vision_ocr(image_bytes: bytes) -> str:
     base64_image = base64.b64encode(image_bytes).decode('utf-8')
@@ -221,22 +262,27 @@ def groq_vision_ocr(image_bytes: bytes) -> str:
     )
     return response.choices[0].message.content.strip()
 
-def auto_ocr(image_bytes: bytes) -> dict:
-    image = Image.open(io.BytesIO(image_bytes))
-    confidence = get_tesseract_confidence(image)
-    print(f"Tesseract confidence: {confidence:.1f}%")
 
-    if confidence >= 60:
-        text = pytesseract.image_to_string(image, config=r'--oem 3 --psm 6')
-        return {"text": text, "engine": "tesseract", "confidence": confidence}
-    else:
-        print("Low confidence, switching to Groq Vision...")
-        text = groq_vision_ocr(image_bytes)
-        return {"text": text, "engine": "groq", "confidence": confidence}
+def auto_ocr(image_bytes: bytes) -> dict:
+    # Use Tesseract locally on Windows, Groq everywhere else
+    if platform.system() == "Windows":
+        image = Image.open(io.BytesIO(image_bytes))
+        confidence = get_tesseract_confidence(image)
+        print(f"Tesseract confidence: {confidence:.1f}%")
+
+        if confidence >= 60:
+            text = pytesseract.image_to_string(image, config=r'--oem 3 --psm 6')
+            return {"text": text, "engine": "tesseract", "confidence": confidence}
+
+    print("Using Groq Vision...")
+    text = groq_vision_ocr(image_bytes)
+    return {"text": text, "engine": "groq", "confidence": 0}
+
 
 @app.get("/")
 def read_root():
     return {"message": "Backend is alive!"}
+
 
 @app.post("/upload")
 async def upload_image(file: UploadFile = File(...)):
@@ -258,20 +304,31 @@ async def upload_image(file: UploadFile = File(...)):
         "confidence": result["confidence"]
     }
 
+
 @app.post("/compile")
-async def compile_latex(data: dict):
+async def compile_latex(data: dict, request: Request):
     latex_code = data.get("latex", "")
 
+    # Rate limit check
+    client_ip = request.client.host
+    limited, retry_after = is_rate_limited(client_ip)
+    if limited:
+        return {
+            "error": "rate_limited",
+            "message": f"You have reached the limit of {RATE_LIMIT} compilations per hour.",
+            "retry_after": retry_after
+        }
+
+    # Security check
     is_safe, reason = sanitize_latex(latex_code)
     if not is_safe:
         return {"error": f"Security violation: {reason}"}
 
-    # Check cache first
+    # Cache check
     cache_key = get_cache_key(latex_code)
     if cache_key in pdf_cache:
         print("Cache hit!")
         cached_pdf, cached_warnings = pdf_cache[cache_key]
-        import json
         warnings_json = base64.b64encode(
             json.dumps(cached_warnings).encode()
         ).decode()
@@ -294,8 +351,7 @@ async def compile_latex(data: dict):
         with open(tex_file, "w") as f:
             f.write(latex_code)
 
-        # Run chktex AFTER file is written
-        # Run chktex and pdflatex IN PARALLEL
+        # Run chktex and pdflatex in parallel
         def run_pdflatex():
             return subprocess.run(
                 ["pdflatex", "-interaction=nonstopmode", "--no-shell-escape", tex_file],
@@ -314,7 +370,6 @@ async def compile_latex(data: dict):
             chktex_warnings = future_warnings.result()
 
         warnings = chktex_warnings + check_outdated_packages(latex_code)
-
         errors = parse_latex_errors(result.stdout)
 
         if errors:
@@ -337,17 +392,15 @@ async def compile_latex(data: dict):
         with open(pdf_file, "rb") as f:
             pdf_bytes = f.read()
 
-    import json
-    warnings_json = base64.b64encode(
-        json.dumps(warnings).encode()
-    ).decode()
-
     # Store in cache
     if len(pdf_cache) >= MAX_CACHE_SIZE:
-        # Remove oldest entry
         oldest_key = next(iter(pdf_cache))
         del pdf_cache[oldest_key]
     pdf_cache[cache_key] = (pdf_bytes, warnings)
+
+    warnings_json = base64.b64encode(
+        json.dumps(warnings).encode()
+    ).decode()
 
     return Response(
         content=pdf_bytes,
