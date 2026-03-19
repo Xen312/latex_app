@@ -104,9 +104,10 @@ def replace_images_with_placeholders(latex_code: str) -> str:
 
     # Insert packages after \documentclass line
     if placeholder_packages:
+        packages = placeholder_packages.strip()
         latex_code = re.sub(
             r'(\\documentclass.*?\})',
-            r'\1\n' + placeholder_packages.strip(),
+            lambda m: m.group(1) + '\n' + packages,
             latex_code,
             count=1
         )
