@@ -416,6 +416,10 @@ async def compile_latex(data: dict, request: Request):
                     headers={"Content-Type": "application/json"}
                 )
 
+            print("Status:", response.status_code)
+            print("Content-Type:", response.headers.get("content-type"))
+            print("Response:", response.text[:500])
+
             if response.status_code not in [200, 201] or "application/pdf" not in response.headers.get("content-type", ""):
                 return {
                     "error": "PDF not generated",
