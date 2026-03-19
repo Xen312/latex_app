@@ -79,13 +79,37 @@ export default function PdfViewer({ pdfUrl }: PdfViewerProps) {
     setLoading(false);
   }
 
-  function zoomIn() {
-    setScale(s => parseFloat(Math.min(s + 0.25, 3.0).toFixed(2)));
-  }
+  const containerScrollRef = useRef<HTMLDivElement>(null);
 
-  function zoomOut() {
-    setScale(s => parseFloat(Math.max(s - 0.25, 0.5).toFixed(2)));
-  }
+function zoomIn() {
+  const container = containerScrollRef.current;
+  if (!container) { setScale(s => parseFloat(Math.min(s + 0.25, 3.0).toFixed(2))); return; }
+  const scrollRatioX = (container.scrollLeft + container.clientWidth / 2) / container.scrollWidth;
+  const scrollRatioY = (container.scrollTop + container.clientHeight / 2) / container.scrollHeight;
+  setScale(s => {
+    const newScale = parseFloat(Math.min(s + 0.25, 3.0).toFixed(2));
+    setTimeout(() => {
+      container.scrollLeft = scrollRatioX * container.scrollWidth - container.clientWidth / 2;
+      container.scrollTop = scrollRatioY * container.scrollHeight - container.clientHeight / 2;
+    }, 50);
+    return newScale;
+  });
+}
+
+function zoomOut() {
+  const container = containerScrollRef.current;
+  if (!container) { setScale(s => parseFloat(Math.max(s - 0.25, 0.5).toFixed(2))); return; }
+  const scrollRatioX = (container.scrollLeft + container.clientWidth / 2) / container.scrollWidth;
+  const scrollRatioY = (container.scrollTop + container.clientHeight / 2) / container.scrollHeight;
+  setScale(s => {
+    const newScale = parseFloat(Math.max(s - 0.25, 0.5).toFixed(2));
+    setTimeout(() => {
+      container.scrollLeft = scrollRatioX * container.scrollWidth - container.clientWidth / 2;
+      container.scrollTop = scrollRatioY * container.scrollHeight - container.clientHeight / 2;
+    }, 50);
+    return newScale;
+  });
+}
 
   function resetZoom() {
     if (!pdfRef.current || !containerRef.current) return;
@@ -198,7 +222,7 @@ export default function PdfViewer({ pdfUrl }: PdfViewerProps) {
 
       {/* Canvas container */}
       <div
-        ref={containerRef}
+        ref={(el) => { (containerRef as any).current = el; (containerScrollRef as any).current = el; }}
         className="w-full bg-gray-950 rounded-lg border border-gray-700"
         style={{ 
             maxHeight: "calc(100vh - 320px)", 
