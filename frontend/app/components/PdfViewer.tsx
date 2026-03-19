@@ -22,7 +22,7 @@ export default function PdfViewer({ pdfUrl }: PdfViewerProps) {
     try {
       // Dynamically import pdfjs only in browser
       const pdfjsLib = await import("pdfjs-dist");
-      pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
 
       const response = await fetch(pdfUrl);
       const arrayBuffer = await response.arrayBuffer();
@@ -47,7 +47,6 @@ export default function PdfViewer({ pdfUrl }: PdfViewerProps) {
       await page.render({
         canvasContext: ctx,
         viewport: scaledViewport,
-        canvas: canvas,
       }).promise;
 
     } catch (err) {
