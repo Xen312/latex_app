@@ -1,8 +1,5 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import * as pdfjsLib from "pdfjs-dist";
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 interface PdfViewerProps {
   pdfUrl: string;
@@ -10,19 +7,23 @@ interface PdfViewerProps {
 
 export default function PdfViewer({ pdfUrl }: PdfViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [numPages, setNumPages] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(true);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
     if (!pdfUrl) return;
-    loadPdf();
+    renderPage();
   }, [pdfUrl, currentPage]);
 
-  async function loadPdf() {
+  async function renderPage() {
     setLoading(true);
     try {
+      // Dynamically import pdfjs only in browser
+      const pdfjsLib = await import("pdfjs-dist");
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+
       const response = await fetch(pdfUrl);
       const arrayBuffer = await response.arrayBuffer();
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -47,7 +48,7 @@ export default function PdfViewer({ pdfUrl }: PdfViewerProps) {
         canvasContext: ctx,
         viewport: scaledViewport,
         canvas: canvas,
-    }).promise;
+      }).promise;
 
     } catch (err) {
       console.error("PDF render error:", err);
@@ -68,7 +69,6 @@ export default function PdfViewer({ pdfUrl }: PdfViewerProps) {
         className={`w-full rounded-lg border border-gray-700 ${loading ? "hidden" : ""}`}
       />
 
-      {/* Page controls */}
       {numPages > 1 && (
         <div className="flex items-center gap-4 text-sm text-gray-400">
           <button
