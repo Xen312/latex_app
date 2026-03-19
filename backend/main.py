@@ -1,6 +1,6 @@
 from fastapi import FastAPI, File, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, JSONResponse
+from fastapi.responses import Response
 from groq import Groq
 from dotenv import load_dotenv
 from PIL import Image
@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 import pytesseract
+import httpx
 import base64
 import io
 import subprocess
@@ -34,30 +35,24 @@ async def add_cors_on_error(request: Request, call_next):
     response.headers["Access-Control-Allow-Origin"] = "*"
     return response
 
-# Tesseract path for Windows only
 if platform.system() == "Windows":
     pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
-# Groq client
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_API_KEY:
     raise ValueError("GROQ_API_KEY not found in .env file!")
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-# File upload settings
 ALLOWED_TYPES = {"image/jpeg", "image/png", "image/jpg", "image/webp", "image/bmp"}
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_FILE_SIZE = 10 * 1024 * 1024
 
-# PDF cache
 pdf_cache: dict = {}
 MAX_CACHE_SIZE = 50
 
-# Rate limiter
 rate_limit_store: dict = defaultdict(list)
 RATE_LIMIT = 10
 RATE_WINDOW = 3600
 
-# Dangerous LaTeX commands
 DANGEROUS_COMMANDS = [
     "\\write18",
     "\\input",
@@ -68,7 +63,6 @@ DANGEROUS_COMMANDS = [
     "\\immediate",
 ]
 
-# Outdated packages
 OUTDATED_PACKAGES = {
     "graphics": "graphicx",
     "epsfig": "graphicx",
@@ -184,10 +178,10 @@ def check_latex_warnings(tex_file: str) -> list:
                         "line": line_num,
                         "context": ""
                     })
-                except:
+                except Exception:
                     continue
     except Exception:
-        pass  # chktex not available on server — skip silently
+        pass
     return warnings
 
 
@@ -264,17 +258,13 @@ def groq_vision_ocr(image_bytes: bytes) -> str:
 
 
 def auto_ocr(image_bytes: bytes) -> dict:
-    # Use Tesseract locally on Windows, Groq everywhere else
     if platform.system() == "Windows":
         image = Image.open(io.BytesIO(image_bytes))
         confidence = get_tesseract_confidence(image)
-        print(f"Tesseract confidence: {confidence:.1f}%")
-
         if confidence >= 60:
             text = pytesseract.image_to_string(image, config=r'--oem 3 --psm 6')
             return {"text": text, "engine": "tesseract", "confidence": confidence}
 
-    print("Using Groq Vision...")
     text = groq_vision_ocr(image_bytes)
     return {"text": text, "engine": "groq", "confidence": 0}
 
@@ -307,10 +297,8 @@ async def upload_image(file: UploadFile = File(...)):
 
 @app.post("/compile")
 async def compile_latex(data: dict, request: Request):
-    import httpx
     latex_code = data.get("latex", "")
 
-    # Rate limit check
     client_ip = request.client.host
     limited, retry_after = is_rate_limited(client_ip)
     if limited:
@@ -320,22 +308,16 @@ async def compile_latex(data: dict, request: Request):
             "retry_after": retry_after
         }
 
-    # Security check
     is_safe, reason = sanitize_latex(latex_code)
     if not is_safe:
         return {"error": f"Security violation: {reason}"}
 
-    # Check warnings
     warnings = check_outdated_packages(latex_code)
 
-    # Cache check
     cache_key = get_cache_key(latex_code)
     if cache_key in pdf_cache:
-        print("Cache hit!")
         cached_pdf, cached_warnings = pdf_cache[cache_key]
-        warnings_json = base64.b64encode(
-            json.dumps(cached_warnings).encode()
-        ).decode()
+        warnings_json = base64.b64encode(json.dumps(cached_warnings).encode()).decode()
         return Response(
             content=cached_pdf,
             media_type="application/pdf",
@@ -348,9 +330,7 @@ async def compile_latex(data: dict, request: Request):
             }
         )
 
-    # Use local pdflatex on Windows, LaTeX.Online API on Linux
     if platform.system() == "Windows":
-        # Local compilation
         with tempfile.TemporaryDirectory() as tmpdir:
             tex_file = os.path.join(tmpdir, "document.tex")
             pdf_file = os.path.join(tmpdir, "document.pdf")
@@ -399,44 +379,26 @@ async def compile_latex(data: dict, request: Request):
                 pdf_bytes = f.read()
 
     else:
-        # Production: use LaTeX.Online API
         try:
             async with httpx.AsyncClient(timeout=60) as client:
                 response = await client.post(
                     "https://latex.ytotech.com/builds/sync",
                     json={
                         "compiler": "pdflatex",
-                        "resources": [
-                            {
-                                "main": True,
-                                "content": latex_code
-                            }
-                        ]
+                        "resources": [{"main": True, "content": latex_code}]
                     },
                     headers={"Content-Type": "application/json"}
                 )
 
-            print("Status:", response.status_code)
-            print("Content-Type:", response.headers.get("content-type"))
-            print("Response:", response.text[:500])
-
             if response.status_code not in [200, 201] or "application/pdf" not in response.headers.get("content-type", ""):
-                # Parse error from API response
                 try:
                     error_data = response.json()
                     log_content = ""
                     if "log_files" in error_data:
-                        # Get the first log file content
                         log_content = list(error_data["log_files"].values())[0]
-
-                        print("LOG CONTENT:", log_content[:300])
-                    
-                    # Reuse our existing error parser
                     errors = parse_latex_errors(log_content)
-                    
                     if not errors:
                         errors = [{"message": "Compilation failed — check LaTeX syntax", "line": None, "context": ""}]
-                    
                     return {
                         "error": "Compilation completed with errors",
                         "error_lines": errors,
@@ -444,7 +406,7 @@ async def compile_latex(data: dict, request: Request):
                         "stdout": log_content,
                         "stderr": ""
                     }
-                except Exception as e:
+                except Exception:
                     return {
                         "error": "PDF not generated",
                         "error_lines": [{"message": "Compilation failed — check LaTeX syntax", "line": None, "context": ""}],
@@ -462,15 +424,12 @@ async def compile_latex(data: dict, request: Request):
                 "stderr": ""
             }
 
-    # Store in cache
     if len(pdf_cache) >= MAX_CACHE_SIZE:
         oldest_key = next(iter(pdf_cache))
         del pdf_cache[oldest_key]
     pdf_cache[cache_key] = (pdf_bytes, warnings)
 
-    warnings_json = base64.b64encode(
-        json.dumps(warnings).encode()
-    ).decode()
+    warnings_json = base64.b64encode(json.dumps(warnings).encode()).decode()
 
     return Response(
         content=pdf_bytes,
