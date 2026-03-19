@@ -94,6 +94,52 @@ OUTDATED_PACKAGES = {
     "utopia": "fourier",
 }
 
+def replace_images_with_placeholders(latex_code: str) -> str:
+    import re
+
+    # Add required packages if not present
+    placeholder_packages = ""
+    if "\\usepackage{tikz}" not in latex_code:
+        placeholder_packages += "\\usepackage{tikz}\n"
+    if "\\usepackage{graphicx}" not in latex_code:
+        placeholder_packages += "\\usepackage{graphicx}\n"
+
+    # Insert packages after \documentclass line
+    if placeholder_packages:
+        latex_code = re.sub(
+            r'(\\documentclass.*?\})',
+            r'\1\n' + placeholder_packages.strip(),
+            latex_code,
+            count=1
+        )
+
+    # Replace \includegraphics[options]{filename} with a placeholder box
+    def make_placeholder(match):
+        full = match.group(0)
+        # Extract filename
+        filename_match = re.search(r'\{([^}]+)\}$', full)
+        filename = filename_match.group(1) if filename_match else "image"
+        # Extract width if specified
+        width_match = re.search(r'width\s*=\s*([^\s,\]]+)', full)
+        width = width_match.group(1) if width_match else "5cm"
+        # Clean width for tikz
+        return (
+            f"\\begin{{tikzpicture}}\n"
+            f"  \\draw[thick, gray] (0,0) rectangle ({width}, 3cm);\n"
+            f"  \\draw[gray] (0,0) -- ({width}, 3cm);\n"
+            f"  \\draw[gray] ({width}, 0) -- (0, 3cm);\n"
+            f"  \\node[gray] at ($({width}/2, 1.5cm)$) {{\\texttt{{{filename}}}}};\n"
+            f"\\end{{tikzpicture}}"
+        )
+
+    latex_code = re.sub(
+        r'\\includegraphics(?:\[[^\]]*\])?\{[^}]+\}',
+        make_placeholder,
+        latex_code
+    )
+
+    return latex_code
+
 
 def get_cache_key(latex_code: str) -> str:
     return hashlib.md5(latex_code.encode()).hexdigest()
@@ -281,6 +327,9 @@ async def compile_latex(data: dict, request: Request):
         return {"error": f"Security violation: {reason}"}
 
     warnings = check_outdated_packages(latex_code)
+
+    # Replace images with placeholders
+    latex_code = replace_images_with_placeholders(latex_code)
 
     cache_key = get_cache_key(latex_code)
     if cache_key in pdf_cache:
