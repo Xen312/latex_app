@@ -99,8 +99,6 @@ def replace_images_with_placeholders(latex_code: str) -> str:
 
     # Add required packages if not present
     placeholder_packages = ""
-    if "\\usepackage{tikz}" not in latex_code:
-        placeholder_packages += "\\usepackage{tikz}\n"
     if "\\usepackage{graphicx}" not in latex_code:
         placeholder_packages += "\\usepackage{graphicx}\n"
 
@@ -120,14 +118,12 @@ def replace_images_with_placeholders(latex_code: str) -> str:
         filename = filename_match.group(1) if filename_match else "image"
         width_match = re.search(r'width\s*=\s*([^\s,\]]+)', full)
         width = width_match.group(1) if width_match else "5cm"
-        
+
         return (
-            f"\\begin{{tikzpicture}}\n"
-            f"  \\draw[thick, gray] (0,0) rectangle ({width}, 3cm);\n"
-            f"  \\draw[gray] (0,0) -- ({width}, 3cm);\n"
-            f"  \\draw[gray] ({width}, 0) -- (0, 3cm);\n"
-            f"  \\node[gray] at (2.5cm, 1.5cm) {{\\small {filename}}};\n"
-            f"\\end{{tikzpicture}}"
+            "\\fbox{\\parbox{" + width + "}{"
+            "\\centering\\vspace{1cm}"
+            "\\texttt{" + filename + "}"
+            "\\vspace{1cm}}}"
         )
 
     latex_code = re.sub(
