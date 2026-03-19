@@ -409,11 +409,11 @@ async def compile_latex(data: dict, request: Request):
                     headers={"Content-Type": "application/x-www-form-urlencoded"}
                 )
 
-            if response.status_code != 200 or response.headers.get("content-type") != "application/pdf":
+            if response.status_code != 200 or "application/pdf" not in response.headers.get("content-type", ""):
                 return {
                     "error": "PDF not generated",
-                    "error_lines": [{"message": "Compilation failed — check LaTeX syntax", "line": None, "context": ""}],
-                    "stdout": "",
+                    "error_lines": [{"message": f"Compilation failed (status {response.status_code}) — check LaTeX syntax", "line": None, "context": ""}],
+                    "stdout": response.text[:500],
                     "stderr": ""
                 }
 
