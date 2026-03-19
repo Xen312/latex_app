@@ -215,7 +215,7 @@ export default function PdfViewer({ pdfUrl }: PdfViewerProps) {
         }}
         onTouchEnd={onTouchEnd}
         >
-        <div style={{ display: "inline-block", minWidth: "100%", padding: "1rem" }}>
+        <div style={{ display: "flex", justifyContent: "center", minWidth: "100%", padding: "1rem" }}>
           {loading && (
             <div className="absolute flex items-center justify-center">
               <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
