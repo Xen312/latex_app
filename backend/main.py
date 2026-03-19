@@ -307,6 +307,7 @@ async def upload_image(file: UploadFile = File(...)):
 
 @app.post("/compile")
 async def compile_latex(data: dict, request: Request):
+    import httpx
     latex_code = data.get("latex", "")
 
     # Rate limit check
@@ -323,6 +324,9 @@ async def compile_latex(data: dict, request: Request):
     is_safe, reason = sanitize_latex(latex_code)
     if not is_safe:
         return {"error": f"Security violation: {reason}"}
+
+    # Check warnings
+    warnings = check_outdated_packages(latex_code)
 
     # Cache check
     cache_key = get_cache_key(latex_code)
@@ -344,53 +348,84 @@ async def compile_latex(data: dict, request: Request):
             }
         )
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tex_file = os.path.join(tmpdir, "document.tex")
-        pdf_file = os.path.join(tmpdir, "document.pdf")
+    # Use local pdflatex on Windows, LaTeX.Online API on Linux
+    if platform.system() == "Windows":
+        # Local compilation
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tex_file = os.path.join(tmpdir, "document.tex")
+            pdf_file = os.path.join(tmpdir, "document.pdf")
 
-        with open(tex_file, "w") as f:
-            f.write(latex_code)
+            with open(tex_file, "w") as f:
+                f.write(latex_code)
 
-        # Run chktex and pdflatex in parallel
-        def run_pdflatex():
-            return subprocess.run(
-                ["pdflatex", "-interaction=nonstopmode", "--no-shell-escape", tex_file],
-                cwd=tmpdir,
-                capture_output=True,
-                text=True
-            )
+            def run_pdflatex():
+                return subprocess.run(
+                    ["pdflatex", "-interaction=nonstopmode", "--no-shell-escape", tex_file],
+                    cwd=tmpdir,
+                    capture_output=True,
+                    text=True
+                )
 
-        def run_chktex():
-            return check_latex_warnings(tex_file)
+            def run_chktex():
+                return check_latex_warnings(tex_file)
 
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            future_pdf = executor.submit(run_pdflatex)
-            future_warnings = executor.submit(run_chktex)
-            result = future_pdf.result()
-            chktex_warnings = future_warnings.result()
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                future_pdf = executor.submit(run_pdflatex)
+                future_warnings = executor.submit(run_chktex)
+                result = future_pdf.result()
+                chktex_warnings = future_warnings.result()
 
-        warnings = chktex_warnings + check_outdated_packages(latex_code)
-        errors = parse_latex_errors(result.stdout)
+            warnings = chktex_warnings + check_outdated_packages(latex_code)
+            errors = parse_latex_errors(result.stdout)
 
-        if errors:
-            return {
-                "error": "Compilation completed with errors",
-                "error_lines": errors,
-                "warning_lines": warnings,
-                "stdout": result.stdout,
-                "stderr": result.stderr
-            }
+            if errors:
+                return {
+                    "error": "Compilation completed with errors",
+                    "error_lines": errors,
+                    "warning_lines": warnings,
+                    "stdout": result.stdout,
+                    "stderr": result.stderr
+                }
 
-        if not os.path.exists(pdf_file):
+            if not os.path.exists(pdf_file):
+                return {
+                    "error": "PDF not generated",
+                    "error_lines": [{"message": "Unknown error — check LaTeX syntax", "line": None, "context": ""}],
+                    "stdout": result.stdout,
+                    "stderr": result.stderr
+                }
+
+            with open(pdf_file, "rb") as f:
+                pdf_bytes = f.read()
+
+    else:
+        # Production: use LaTeX.Online API
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(
+                    "https://latexonline.cc/compile",
+                    params={"command": "pdflatex"},
+                    content=latex_code.encode(),
+                    headers={"Content-Type": "application/x-www-form-urlencoded"}
+                )
+
+            if response.status_code != 200 or response.headers.get("content-type") != "application/pdf":
+                return {
+                    "error": "PDF not generated",
+                    "error_lines": [{"message": "Compilation failed — check LaTeX syntax", "line": None, "context": ""}],
+                    "stdout": "",
+                    "stderr": ""
+                }
+
+            pdf_bytes = response.content
+
+        except Exception as e:
             return {
                 "error": "PDF not generated",
-                "error_lines": [{"message": "Unknown error — check LaTeX syntax", "line": None, "context": ""}],
-                "stdout": result.stdout,
-                "stderr": result.stderr
+                "error_lines": [{"message": f"Compilation service error: {str(e)}", "line": None, "context": ""}],
+                "stdout": "",
+                "stderr": ""
             }
-
-        with open(pdf_file, "rb") as f:
-            pdf_bytes = f.read()
 
     # Store in cache
     if len(pdf_cache) >= MAX_CACHE_SIZE:
