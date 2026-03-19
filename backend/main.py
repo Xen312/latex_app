@@ -325,6 +325,8 @@ async def compile_latex(data: dict, request: Request):
     # Replace images with placeholders
     latex_code = replace_images_with_placeholders(latex_code)
 
+    print("REPLACED LATEX:", latex_code)
+
     cache_key = get_cache_key(latex_code)
     if cache_key in pdf_cache:
         cached_pdf, cached_warnings = pdf_cache[cache_key]
