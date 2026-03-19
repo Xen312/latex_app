@@ -454,3 +454,9 @@ async def compile_latex(data: dict, request: Request):
             "Access-Control-Expose-Headers": "X-Warnings-Count, X-Warnings-Data"
         }
     )
+
+@app.post("/debug")
+async def debug_latex(data: dict):
+    latex_code = data.get("latex", "")
+    replaced = replace_images_with_placeholders(latex_code)
+    return {"original": latex_code, "replaced": replaced}
