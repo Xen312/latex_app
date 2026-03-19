@@ -49,12 +49,12 @@ MAX_CACHE_SIZE = 50
 
 DANGEROUS_COMMANDS = [
     "\\write18",
-    "\\input",
-    "\\include",
     "\\catcode",
     "\\openout",
     "\\openin",
     "\\immediate",
+    "\\include{",   # matches \include{ but not \includegraphics
+    "\\input{",     # matches \input{ but not other commands
 ]
 
 OUTDATED_PACKAGES = {
