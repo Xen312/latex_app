@@ -199,11 +199,17 @@ export default function PdfViewer({ pdfUrl }: PdfViewerProps) {
       {/* Canvas container */}
       <div
         ref={containerRef}
-        className="w-full overflow-x-auto overflow-y-auto bg-gray-950 rounded-lg border border-gray-700"
-        style={{ maxHeight: "calc(100vh - 320px)", minHeight: "400px", touchAction: "none" }}
+        className="w-full bg-gray-950 rounded-lg border border-gray-700"
+        style={{ 
+            maxHeight: "calc(100vh - 320px)", 
+            minHeight: "400px", 
+            overflowX: "auto",
+            overflowY: "auto",
+            touchAction: "none"
+        }}
         onTouchMove={(e) => { e.preventDefault(); onTouchMove(e); }}
         onTouchEnd={onTouchEnd}
-      >
+        >
         <div className="flex justify-center p-4">
           {loading && (
             <div className="absolute flex items-center justify-center">
