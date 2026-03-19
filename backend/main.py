@@ -4,8 +4,6 @@ from fastapi.responses import Response
 from groq import Groq
 from dotenv import load_dotenv
 from PIL import Image
-from datetime import datetime, timedelta
-from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 import pytesseract
 import httpx
@@ -48,10 +46,6 @@ MAX_FILE_SIZE = 10 * 1024 * 1024
 
 pdf_cache: dict = {}
 MAX_CACHE_SIZE = 50
-
-rate_limit_store: dict = defaultdict(list)
-RATE_LIMIT = 10
-RATE_WINDOW = 3600
 
 DANGEROUS_COMMANDS = [
     "\\write18",
@@ -103,23 +97,6 @@ OUTDATED_PACKAGES = {
 
 def get_cache_key(latex_code: str) -> str:
     return hashlib.md5(latex_code.encode()).hexdigest()
-
-
-def is_rate_limited(ip: str) -> tuple[bool, int]:
-    now = datetime.now()
-    window_start = now - timedelta(seconds=RATE_WINDOW)
-    rate_limit_store[ip] = [
-        t for t in rate_limit_store[ip]
-        if t > window_start
-    ]
-    requests_made = len(rate_limit_store[ip])
-    if requests_made >= RATE_LIMIT:
-        oldest = rate_limit_store[ip][0]
-        retry_after = int((oldest + timedelta(seconds=RATE_WINDOW) - now).total_seconds())
-        return True, retry_after
-    rate_limit_store[ip].append(now)
-    return False, 0
-
 
 def sanitize_latex(latex_code: str) -> tuple[bool, str]:
     for cmd in DANGEROUS_COMMANDS:
@@ -298,15 +275,6 @@ async def upload_image(file: UploadFile = File(...)):
 @app.post("/compile")
 async def compile_latex(data: dict, request: Request):
     latex_code = data.get("latex", "")
-
-    client_ip = request.client.host
-    limited, retry_after = is_rate_limited(client_ip)
-    if limited:
-        return {
-            "error": "rate_limited",
-            "message": f"You have reached the limit of {RATE_LIMIT} compilations per hour.",
-            "retry_after": retry_after
-        }
 
     is_safe, reason = sanitize_latex(latex_code)
     if not is_safe:
