@@ -416,7 +416,7 @@ async def compile_latex(data: dict, request: Request):
                     headers={"Content-Type": "application/json"}
                 )
 
-            if response.status_code != 200 or "application/pdf" not in response.headers.get("content-type", ""):
+            if response.status_code not in [200, 201] or "application/pdf" not in response.headers.get("content-type", ""):
                 return {
                     "error": "PDF not generated",
                     "error_lines": [{"message": f"Compilation failed (status {response.status_code}) — check LaTeX syntax", "line": None, "context": ""}],
