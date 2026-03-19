@@ -210,7 +210,7 @@ export default function PdfViewer({ pdfUrl }: PdfViewerProps) {
         onTouchMove={(e) => { e.preventDefault(); onTouchMove(e); }}
         onTouchEnd={onTouchEnd}
         >
-        <div className="flex justify-center p-4">
+        <div style={{ display: "inline-block", minWidth: "100%", padding: "1rem" }}>
           {loading && (
             <div className="absolute flex items-center justify-center">
               <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
@@ -218,9 +218,13 @@ export default function PdfViewer({ pdfUrl }: PdfViewerProps) {
           )}
           <canvas
             ref={canvasRef}
-            className="shadow-lg"
-            style={{ opacity: loading ? 0.3 : 1, transition: "opacity 0.2s" }}
-          />
+            style={{ 
+                opacity: loading ? 0.3 : 1, 
+                transition: "opacity 0.2s",
+                display: "block",
+                boxShadow: "0 4px 6px rgba(0,0,0,0.5)"
+            }}
+        />
         </div>
       </div>
     </div>
