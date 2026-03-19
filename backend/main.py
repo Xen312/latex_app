@@ -401,12 +401,19 @@ async def compile_latex(data: dict, request: Request):
     else:
         # Production: use LaTeX.Online API
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(timeout=60) as client:
                 response = await client.post(
-                    "https://latexonline.cc/compile",
-                    params={"command": "pdflatex"},
-                    content=latex_code.encode(),
-                    headers={"Content-Type": "application/x-www-form-urlencoded"}
+                    "https://latex.ytotech.com/builds/sync",
+                    json={
+                        "compiler": "pdflatex",
+                        "resources": [
+                            {
+                                "main": True,
+                                "content": latex_code
+                            }
+                        ]
+                    },
+                    headers={"Content-Type": "application/json"}
                 )
 
             if response.status_code != 200 or "application/pdf" not in response.headers.get("content-type", ""):
