@@ -205,9 +205,14 @@ export default function PdfViewer({ pdfUrl }: PdfViewerProps) {
             minHeight: "400px", 
             overflowX: "auto",
             overflowY: "auto",
-            touchAction: "none"
+            touchAction: "pan-x pan-y",
         }}
-        onTouchMove={(e) => { e.preventDefault(); onTouchMove(e); }}
+        onTouchMove={(e) => {
+            if (e.touches.length === 2) {
+            e.preventDefault();
+            onTouchMove(e);
+            }
+        }}
         onTouchEnd={onTouchEnd}
         >
         <div style={{ display: "inline-block", minWidth: "100%", padding: "1rem" }}>
