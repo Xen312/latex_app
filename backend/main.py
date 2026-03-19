@@ -116,19 +116,17 @@ def replace_images_with_placeholders(latex_code: str) -> str:
     # Replace \includegraphics[options]{filename} with a placeholder box
     def make_placeholder(match):
         full = match.group(0)
-        # Extract filename
         filename_match = re.search(r'\{([^}]+)\}$', full)
         filename = filename_match.group(1) if filename_match else "image"
-        # Extract width if specified
         width_match = re.search(r'width\s*=\s*([^\s,\]]+)', full)
         width = width_match.group(1) if width_match else "5cm"
-        # Clean width for tikz
+        
         return (
             f"\\begin{{tikzpicture}}\n"
             f"  \\draw[thick, gray] (0,0) rectangle ({width}, 3cm);\n"
             f"  \\draw[gray] (0,0) -- ({width}, 3cm);\n"
             f"  \\draw[gray] ({width}, 0) -- (0, 3cm);\n"
-            f"  \\node[gray] at ($({width}/2, 1.5cm)$) {{\\texttt{{{filename}}}}};\n"
+            f"  \\node[gray] at (2.5cm, 1.5cm) {{\\small {filename}}};\n"
             f"\\end{{tikzpicture}}"
         )
 
