@@ -428,6 +428,8 @@ async def compile_latex(data: dict, request: Request):
                     if "log_files" in error_data:
                         # Get the first log file content
                         log_content = list(error_data["log_files"].values())[0]
+
+                        print("LOG CONTENT:", log_content[:300])
                     
                     # Reuse our existing error parser
                     errors = parse_latex_errors(log_content)
