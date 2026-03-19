@@ -421,12 +421,34 @@ async def compile_latex(data: dict, request: Request):
             print("Response:", response.text[:500])
 
             if response.status_code not in [200, 201] or "application/pdf" not in response.headers.get("content-type", ""):
-                return {
-                    "error": "PDF not generated",
-                    "error_lines": [{"message": f"Compilation failed (status {response.status_code}) — check LaTeX syntax", "line": None, "context": ""}],
-                    "stdout": response.text[:500],
-                    "stderr": ""
-                }
+                # Parse error from API response
+                try:
+                    error_data = response.json()
+                    log_content = ""
+                    if "log_files" in error_data:
+                        # Get the first log file content
+                        log_content = list(error_data["log_files"].values())[0]
+                    
+                    # Reuse our existing error parser
+                    errors = parse_latex_errors(log_content)
+                    
+                    if not errors:
+                        errors = [{"message": "Compilation failed — check LaTeX syntax", "line": None, "context": ""}]
+                    
+                    return {
+                        "error": "Compilation completed with errors",
+                        "error_lines": errors,
+                        "warning_lines": warnings,
+                        "stdout": log_content,
+                        "stderr": ""
+                    }
+                except Exception as e:
+                    return {
+                        "error": "PDF not generated",
+                        "error_lines": [{"message": "Compilation failed — check LaTeX syntax", "line": None, "context": ""}],
+                        "stdout": "",
+                        "stderr": ""
+                    }
 
             pdf_bytes = response.content
 
