@@ -109,20 +109,22 @@ export default function PdfViewer({ pdfUrl }: PdfViewerProps) {
 
   function onTouchMove(e: React.TouchEvent) {
     if (e.touches.length !== 2) return;
+    e.preventDefault();
+
     const dx = e.touches[0].clientX - e.touches[1].clientX;
     const dy = e.touches[0].clientY - e.touches[1].clientY;
     const dist = Math.sqrt(dx * dx + dy * dy);
 
     if (lastDist.current !== null) {
-      const delta = dist - lastDist.current;
-      const newScale = parseFloat(
-        Math.min(Math.max(lastScale.current + delta * 0.005, 0.5), 3.0).toFixed(2)
-      );
-      setScale(newScale);
+        const ratio = dist / lastDist.current;
+        const newScale = parseFloat(
+        Math.min(Math.max(scale * ratio, 0.5), 3.0).toFixed(2)
+        );
+        setScale(newScale);
+        lastScale.current = newScale;
     }
     lastDist.current = dist;
-    lastScale.current = scale;
-  }
+}
 
   function onTouchEnd() {
     lastDist.current = null;
@@ -197,9 +199,9 @@ export default function PdfViewer({ pdfUrl }: PdfViewerProps) {
       {/* Canvas container */}
       <div
         ref={containerRef}
-        className="w-full overflow-auto bg-gray-950 rounded-lg border border-gray-700"
-        style={{ maxHeight: "calc(100vh - 320px)", minHeight: "400px" }}
-        onTouchMove={onTouchMove}
+        className="w-full overflow-x-auto overflow-y-auto bg-gray-950 rounded-lg border border-gray-700"
+        style={{ maxHeight: "calc(100vh - 320px)", minHeight: "400px", touchAction: "none" }}
+        onTouchMove={(e) => { e.preventDefault(); onTouchMove(e); }}
         onTouchEnd={onTouchEnd}
       >
         <div className="flex justify-center p-4">
