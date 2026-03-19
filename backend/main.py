@@ -9,6 +9,7 @@ import pytesseract
 import httpx
 import base64
 import io
+import re
 import subprocess
 import tempfile
 import os
@@ -47,14 +48,14 @@ MAX_FILE_SIZE = 10 * 1024 * 1024
 pdf_cache: dict = {}
 MAX_CACHE_SIZE = 50
 
-DANGEROUS_COMMANDS = [
-    "\\write18",
-    "\\catcode",
-    "\\openout",
-    "\\openin",
-    "\\immediate",
-    "\\include{",   # matches \include{ but not \includegraphics
-    "\\input{",     # matches \input{ but not other commands
+DANGEROUS_PATTERNS = [
+    r'\\write18',
+    r'\\catcode',
+    r'\\openout',
+    r'\\openin',
+    r'\\immediate',
+    r'\\include\s*\{',
+    r'\\input\s*\{',
 ]
 
 OUTDATED_PACKAGES = {
@@ -94,55 +95,15 @@ OUTDATED_PACKAGES = {
     "utopia": "fourier",
 }
 
-def replace_images_with_placeholders(latex_code: str) -> str:
-    import re
-
-    # Add required packages if not present
-    placeholder_packages = ""
-    if "\\usepackage{graphicx}" not in latex_code:
-        placeholder_packages += "\\usepackage{graphicx}\n"
-
-    # Insert packages after \documentclass line
-    if placeholder_packages:
-        packages = placeholder_packages.strip()
-        latex_code = re.sub(
-            r'(\\documentclass.*?\})',
-            lambda m: m.group(1) + '\n' + packages,
-            latex_code,
-            count=1
-        )
-
-    # Replace \includegraphics[options]{filename} with a placeholder box
-    def make_placeholder(match):
-        full = match.group(0)
-        filename_match = re.search(r'\{([^}]+)\}$', full)
-        filename = filename_match.group(1) if filename_match else "image"
-        width_match = re.search(r'width\s*=\s*([^\s,\]]+)', full)
-        width = width_match.group(1) if width_match else "5cm"
-
-        return (
-            "\\fbox{\\parbox{" + width + "}{"
-            "\\centering\\vspace{1cm}"
-            "\\texttt{" + filename + "}"
-            "\\vspace{1cm}}}"
-        )
-
-    latex_code = re.sub(
-        r'\\includegraphics(?:\[[^\]]*\])?\{[^}]+\}',
-        make_placeholder,
-        latex_code
-    )
-
-    return latex_code
-
 
 def get_cache_key(latex_code: str) -> str:
     return hashlib.md5(latex_code.encode()).hexdigest()
 
+
 def sanitize_latex(latex_code: str) -> tuple[bool, str]:
-    for cmd in DANGEROUS_COMMANDS:
-        if cmd in latex_code:
-            return False, f"Dangerous command detected: {cmd}"
+    for pattern in DANGEROUS_PATTERNS:
+        if re.search(pattern, latex_code):
+            return False, f"Dangerous command detected: {pattern}"
     return True, ""
 
 
@@ -163,11 +124,7 @@ def parse_latex_errors(stdout: str) -> list:
                     error_line = parts[0][2:]
                     context = parts[1].strip() if len(parts) > 1 else ""
                     break
-            errors.append({
-                "message": message,
-                "line": error_line,
-                "context": context
-            })
+            errors.append({"message": message, "line": error_line, "context": context})
         i += 1
     return errors
 
@@ -181,19 +138,16 @@ def check_latex_warnings(tex_file: str) -> list:
             text=True,
             timeout=10
         )
-        output = result.stdout + result.stderr
-        for line in output.split('\n'):
+        for line in (result.stdout + result.stderr).split('\n'):
             line = line.strip()
             if not line:
                 continue
             parts = line.split(':')
             if len(parts) >= 4:
                 try:
-                    line_num = parts[1].strip()
-                    message = ':'.join(parts[3:]).strip()
                     warnings.append({
-                        "message": message,
-                        "line": line_num,
+                        "message": ':'.join(parts[3:]).strip(),
+                        "line": parts[1].strip(),
                         "context": ""
                     })
                 except Exception:
@@ -234,6 +188,35 @@ def check_outdated_packages(latex_code: str) -> list:
     return warnings
 
 
+def replace_images_with_placeholders(latex_code: str) -> str:
+    if "\\usepackage{graphicx}" not in latex_code:
+        latex_code = re.sub(
+            r'(\\documentclass.*?\})',
+            lambda m: m.group(1) + '\n\\usepackage{graphicx}',
+            latex_code,
+            count=1
+        )
+
+    def make_placeholder(match):
+        full = match.group(0)
+        filename_match = re.search(r'\{([^}]+)\}$', full)
+        filename = filename_match.group(1) if filename_match else "image"
+        width_match = re.search(r'width\s*=\s*([^\s,\]]+)', full)
+        width = width_match.group(1) if width_match else "5cm"
+        return (
+            "\\fbox{\\parbox{" + width + "}{"
+            "\\centering\\vspace{1cm}"
+            "\\texttt{" + filename + "}"
+            "\\vspace{1cm}}}"
+        )
+
+    return re.sub(
+        r'\\includegraphics(?:\[[^\]]*\])?\{[^}]+\}',
+        make_placeholder,
+        latex_code
+    )
+
+
 def get_tesseract_confidence(image: Image.Image) -> float:
     data = pytesseract.image_to_data(
         image,
@@ -259,9 +242,7 @@ def groq_vision_ocr(image_bytes: bytes) -> str:
                 "content": [
                     {
                         "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{base64_image}"
-                        }
+                        "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
                     },
                     {
                         "type": "text",
@@ -282,7 +263,6 @@ def auto_ocr(image_bytes: bytes) -> dict:
         if confidence >= 60:
             text = pytesseract.image_to_string(image, config=r'--oem 3 --psm 6')
             return {"text": text, "engine": "tesseract", "confidence": confidence}
-
     text = groq_vision_ocr(image_bytes)
     return {"text": text, "engine": "groq", "confidence": 0}
 
@@ -295,9 +275,7 @@ def read_root():
 @app.post("/upload")
 async def upload_image(file: UploadFile = File(...)):
     if file.content_type not in ALLOWED_TYPES:
-        return {
-            "error": f"Invalid file type: {file.content_type}. Allowed: JPEG, PNG, WEBP, BMP"
-        }
+        return {"error": f"Invalid file type: {file.content_type}. Allowed: JPEG, PNG, WEBP, BMP"}
 
     contents = await file.read()
 
@@ -314,7 +292,7 @@ async def upload_image(file: UploadFile = File(...)):
 
 
 @app.post("/compile")
-async def compile_latex(data: dict, request: Request):
+async def compile_latex(data: dict):
     latex_code = data.get("latex", "")
 
     is_safe, reason = sanitize_latex(latex_code)
@@ -322,10 +300,7 @@ async def compile_latex(data: dict, request: Request):
         return {"error": f"Security violation: {reason}"}
 
     warnings = check_outdated_packages(latex_code)
-
-    # Replace images with placeholders
     latex_code = replace_images_with_placeholders(latex_code)
-    print("REPLACED LATEX:", latex_code)
 
     cache_key = get_cache_key(latex_code)
     if cache_key in pdf_cache:
@@ -351,20 +326,12 @@ async def compile_latex(data: dict, request: Request):
             with open(tex_file, "w") as f:
                 f.write(latex_code)
 
-            def run_pdflatex():
-                return subprocess.run(
-                    ["pdflatex", "-interaction=nonstopmode", "--no-shell-escape", tex_file],
-                    cwd=tmpdir,
-                    capture_output=True,
-                    text=True
-                )
-
-            def run_chktex():
-                return check_latex_warnings(tex_file)
-
             with ThreadPoolExecutor(max_workers=2) as executor:
-                future_pdf = executor.submit(run_pdflatex)
-                future_warnings = executor.submit(run_chktex)
+                future_pdf = executor.submit(lambda: subprocess.run(
+                    ["pdflatex", "-interaction=nonstopmode", "--no-shell-escape", tex_file],
+                    cwd=tmpdir, capture_output=True, text=True
+                ))
+                future_warnings = executor.submit(check_latex_warnings, tex_file)
                 result = future_pdf.result()
                 chktex_warnings = future_warnings.result()
 
@@ -406,12 +373,8 @@ async def compile_latex(data: dict, request: Request):
             if response.status_code not in [200, 201] or "application/pdf" not in response.headers.get("content-type", ""):
                 try:
                     error_data = response.json()
-                    log_content = ""
-                    if "log_files" in error_data:
-                        log_content = list(error_data["log_files"].values())[0]
-                    errors = parse_latex_errors(log_content)
-                    if not errors:
-                        errors = [{"message": "Compilation failed — check LaTeX syntax", "line": None, "context": ""}]
+                    log_content = list(error_data.get("log_files", {}).values())[0] if "log_files" in error_data else ""
+                    errors = parse_latex_errors(log_content) or [{"message": "Compilation failed — check LaTeX syntax", "line": None, "context": ""}]
                     return {
                         "error": "Compilation completed with errors",
                         "error_lines": errors,
@@ -454,9 +417,3 @@ async def compile_latex(data: dict, request: Request):
             "Access-Control-Expose-Headers": "X-Warnings-Count, X-Warnings-Data"
         }
     )
-
-@app.post("/debug")
-async def debug_latex(data: dict):
-    latex_code = data.get("latex", "")
-    replaced = replace_images_with_placeholders(latex_code)
-    return {"original": latex_code, "replaced": replaced}
