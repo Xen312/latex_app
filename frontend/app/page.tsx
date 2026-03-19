@@ -15,6 +15,7 @@ import {
 import { supabase } from "@/lib/supabase";
 import Auth from "./components/Auth";
 import History from "./components/History";
+import PdfViewer from "./components/PdfViewer";
 
 type Tab = "preview" | "latex";
 
@@ -362,11 +363,7 @@ export default function Home() {
             {activeTab === "preview" && (
               <div className="p-2 sm:p-4">
                 {pdfUrl ? (
-                  <iframe
-                    src={pdfUrl}
-                    className="w-full rounded-lg border border-gray-700"
-                    style={{ height: "calc(100vh - 300px)", minHeight: "400px" }}
-                  />
+                  <PdfViewer pdfUrl={pdfUrl} />
                 ) : (
                   <div className="h-64 sm:h-96 flex flex-col items-center justify-center text-gray-500 gap-3">
                     <XCircle className="w-10 h-10 sm:w-12 sm:h-12 text-red-500" />
