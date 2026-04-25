@@ -3,19 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from groq import Groq
 from dotenv import load_dotenv
-from PIL import Image
-from concurrent.futures import ThreadPoolExecutor
-import pytesseract
 import httpx
 import base64
-import io
 import re
-import subprocess
-import tempfile
 import os
 import json
 import hashlib
-import platform
 
 load_dotenv()
 
@@ -33,9 +26,6 @@ async def add_cors_on_error(request: Request, call_next):
     response = await call_next(request)
     response.headers["Access-Control-Allow-Origin"] = "*"
     return response
-
-if platform.system() == "Windows":
-    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_API_KEY:
@@ -129,34 +119,6 @@ def parse_latex_errors(stdout: str) -> list:
     return errors
 
 
-def check_latex_warnings(tex_file: str) -> list:
-    warnings = []
-    try:
-        result = subprocess.run(
-            ["chktex", "-q", "-wall", tex_file],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
-        for line in (result.stdout + result.stderr).split('\n'):
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split(':')
-            if len(parts) >= 4:
-                try:
-                    warnings.append({
-                        "message": ':'.join(parts[3:]).strip(),
-                        "line": parts[1].strip(),
-                        "context": ""
-                    })
-                except Exception:
-                    continue
-    except Exception:
-        pass
-    return warnings
-
-
 def check_outdated_packages(latex_code: str) -> list:
     warnings = []
     for i, line in enumerate(latex_code.split('\n'), start=1):
@@ -217,21 +179,6 @@ def replace_images_with_placeholders(latex_code: str) -> str:
     )
 
 
-def get_tesseract_confidence(image: Image.Image) -> float:
-    data = pytesseract.image_to_data(
-        image,
-        output_type=pytesseract.Output.DICT,
-        config=r'--oem 3 --psm 6'
-    )
-    confidences = [
-        int(c) for c in data['conf']
-        if str(c).strip() != '-1' and str(c).strip() != ''
-    ]
-    if not confidences:
-        return 0.0
-    return sum(confidences) / len(confidences)
-
-
 def groq_vision_ocr(image_bytes: bytes) -> str:
     base64_image = base64.b64encode(image_bytes).decode('utf-8')
     response = groq_client.chat.completions.create(
@@ -256,17 +203,6 @@ def groq_vision_ocr(image_bytes: bytes) -> str:
     return response.choices[0].message.content.strip()
 
 
-def auto_ocr(image_bytes: bytes) -> dict:
-    if platform.system() == "Windows":
-        image = Image.open(io.BytesIO(image_bytes))
-        confidence = get_tesseract_confidence(image)
-        if confidence >= 60:
-            text = pytesseract.image_to_string(image, config=r'--oem 3 --psm 6')
-            return {"text": text, "engine": "tesseract", "confidence": confidence}
-    text = groq_vision_ocr(image_bytes)
-    return {"text": text, "engine": "groq", "confidence": 0}
-
-
 @app.get("/")
 def read_root():
     return {"message": "Backend is alive!"}
@@ -282,12 +218,12 @@ async def upload_image(file: UploadFile = File(...)):
     if len(contents) > MAX_FILE_SIZE:
         return {"error": "File too large. Maximum size is 10MB."}
 
-    result = auto_ocr(contents)
+    text = groq_vision_ocr(contents)
     return {
         "filename": file.filename,
-        "text": result["text"],
-        "engine": result["engine"],
-        "confidence": result["confidence"]
+        "text": text,
+        "engine": "groq",
+        "confidence": 0
     }
 
 
@@ -318,87 +254,46 @@ async def compile_latex(data: dict):
             }
         )
 
-    if platform.system() == "Windows":
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tex_file = os.path.join(tmpdir, "document.tex")
-            pdf_file = os.path.join(tmpdir, "document.pdf")
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(
+                "https://latex.ytotech.com/builds/sync",
+                json={
+                    "compiler": "pdflatex",
+                    "resources": [{"main": True, "content": latex_code}]
+                },
+                headers={"Content-Type": "application/json"}
+            )
 
-            with open(tex_file, "w") as f:
-                f.write(latex_code)
-
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                future_pdf = executor.submit(lambda: subprocess.run(
-                    ["pdflatex", "-interaction=nonstopmode", "--no-shell-escape", tex_file],
-                    cwd=tmpdir, capture_output=True, text=True
-                ))
-                future_warnings = executor.submit(check_latex_warnings, tex_file)
-                result = future_pdf.result()
-                chktex_warnings = future_warnings.result()
-
-            warnings = chktex_warnings + check_outdated_packages(latex_code)
-            errors = parse_latex_errors(result.stdout)
-
-            if errors:
+        if response.status_code not in [200, 201] or "application/pdf" not in response.headers.get("content-type", ""):
+            try:
+                error_data = response.json()
+                log_content = list(error_data.get("log_files", {}).values())[0] if "log_files" in error_data else ""
+                errors = parse_latex_errors(log_content) or [{"message": "Compilation failed — check LaTeX syntax", "line": None, "context": ""}]
                 return {
                     "error": "Compilation completed with errors",
                     "error_lines": errors,
                     "warning_lines": warnings,
-                    "stdout": result.stdout,
-                    "stderr": result.stderr
+                    "stdout": log_content,
+                    "stderr": ""
                 }
-
-            if not os.path.exists(pdf_file):
+            except Exception:
                 return {
                     "error": "PDF not generated",
-                    "error_lines": [{"message": "Unknown error — check LaTeX syntax", "line": None, "context": ""}],
-                    "stdout": result.stdout,
-                    "stderr": result.stderr
+                    "error_lines": [{"message": "Compilation failed — check LaTeX syntax", "line": None, "context": ""}],
+                    "stdout": "",
+                    "stderr": ""
                 }
 
-            with open(pdf_file, "rb") as f:
-                pdf_bytes = f.read()
+        pdf_bytes = response.content
 
-    else:
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                response = await client.post(
-                    "https://latex.ytotech.com/builds/sync",
-                    json={
-                        "compiler": "pdflatex",
-                        "resources": [{"main": True, "content": latex_code}]
-                    },
-                    headers={"Content-Type": "application/json"}
-                )
-
-            if response.status_code not in [200, 201] or "application/pdf" not in response.headers.get("content-type", ""):
-                try:
-                    error_data = response.json()
-                    log_content = list(error_data.get("log_files", {}).values())[0] if "log_files" in error_data else ""
-                    errors = parse_latex_errors(log_content) or [{"message": "Compilation failed — check LaTeX syntax", "line": None, "context": ""}]
-                    return {
-                        "error": "Compilation completed with errors",
-                        "error_lines": errors,
-                        "warning_lines": warnings,
-                        "stdout": log_content,
-                        "stderr": ""
-                    }
-                except Exception:
-                    return {
-                        "error": "PDF not generated",
-                        "error_lines": [{"message": "Compilation failed — check LaTeX syntax", "line": None, "context": ""}],
-                        "stdout": "",
-                        "stderr": ""
-                    }
-
-            pdf_bytes = response.content
-
-        except Exception as e:
-            return {
-                "error": "PDF not generated",
-                "error_lines": [{"message": f"Compilation service error: {str(e)}", "line": None, "context": ""}],
-                "stdout": "",
-                "stderr": ""
-            }
+    except Exception as e:
+        return {
+            "error": "PDF not generated",
+            "error_lines": [{"message": f"Compilation service error: {str(e)}", "line": None, "context": ""}],
+            "stdout": "",
+            "stderr": ""
+        }
 
     if len(pdf_cache) >= MAX_CACHE_SIZE:
         oldest_key = next(iter(pdf_cache))

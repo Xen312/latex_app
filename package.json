@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "git": "^0.1.5",
     "pdfjs-dist": "^5.5.207"
   }
 }
