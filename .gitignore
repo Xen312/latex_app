@@ -10,3 +10,6 @@ __pycache__/
 node_modules/
 frontend/.next/
 frontend/node_modules/
+
+#images and other files
+imgs/
