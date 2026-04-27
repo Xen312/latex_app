@@ -26,8 +26,6 @@ interface ErrorLine {
   context: string;
 }
 
-const RATE_LIMIT = 10;
-
 export default function Home() {
   const [extractedText, setExtractedText] = useState("");
   const [isUploading, setIsUploading] = useState(false);
@@ -126,19 +124,6 @@ export default function Home() {
     const contentType = res.headers.get("content-type");
     if (!res.ok || contentType?.includes("application/json")) {
       const err = await res.json();
-
-      if (err.error === "rate_limited") {
-        const minutes = Math.ceil(err.retry_after / 60);
-        setCompileError([{
-          message: `Rate limit reached — you can compile ${RATE_LIMIT} times per hour. Try again in ${minutes} minute${minutes > 1 ? "s" : ""}.`,
-          line: null,
-          context: ""
-        }]);
-        setActiveTab("latex");
-        setIsCompiling(false);
-        return;
-      }
-
       setCompileError(err.error_lines || [{ message: "Unknown compilation error", line: null, context: "" }]);
       setCompileWarnings(err.warning_lines || []);
       setActiveTab("latex");
