@@ -193,33 +193,64 @@ def groq_vision_ocr(image_bytes: bytes) -> str:
                     },
                     {
                         "type": "text",
-                        "text": """
-                    This image contains handwritten LaTeX source code.
+                        "text": r"""
+                                You are an OCR engine for handwritten LaTeX.
 
-                    Transcribe it into valid LaTeX.
+                                Your ONLY task is to return a compilable LaTeX document.
 
-                    Rules:
+                                Rules:
 
-                    1. Preserve the document exactly whenever possible.
-                    2. Carefully inspect ONLY the document preamble (everything before \\begin{document}).
-                    3. Verify every \\usepackage command.
-                    4. If a package name is an obvious OCR mistake, automatically correct it.
-                    Examples:
-                    - amsymb -> amssymb
-                    - graphic -> graphicx
-                    - epsfig -> graphicx
-                    5. Do not invent packages.
-                    6. Do not change equations, environments, or any content after \\begin{document}, even if they contain errors.
-                    7. Preserve comments, spacing and formatting.
-                    8. Return ONLY the corrected LaTeX source.
-                    """
+                                - Return ONLY the final LaTeX source.
+                                - NEVER explain your reasoning.
+                                - NEVER describe what you are doing.
+                                - NEVER output markdown.
+                                - NEVER use ```latex.
+                                - NEVER write "Step 1", "Step 2", etc.
+                                - NEVER write bullet points.
+                                - NEVER write notes.
+
+                                Before returning the document:
+
+                                1. Check every package in the preamble.
+                                2. If a package name is obviously misspelled, silently correct it.
+                                Example:
+                                amsymb -> amssymb
+                                amfonts -> amsfonts
+                                graphic -> graphicx
+                                3. Do NOT modify anything after \begin{document}.
+                                4. If you are uncertain about a package name, leave it unchanged.
+
+                                Your response MUST begin with
+
+                                \documentclass
+
+                                and MUST end with
+
+                                \end{document}
+
+                                Output NOTHING except the LaTeX source.
+                                """
                     }
                 ]
             }
         ],
         max_tokens=1000
     )
-    return response.choices[0].message.content.strip()
+    text = response.choices[0].message.content.strip()
+
+    import re
+
+    # Keep only from \documentclass onwards
+    match = re.search(r'\\documentclass[\s\S]*', text)
+    if match:
+        text = match.group(0)
+
+    # Cut everything after \end{document}
+    match = re.search(r'\\end\{document\}', text)
+    if match:
+        text = text[:match.end()]
+
+    return text
 
 
 @app.get("/")
