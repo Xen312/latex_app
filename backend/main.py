@@ -193,7 +193,26 @@ def groq_vision_ocr(image_bytes: bytes) -> str:
                     },
                     {
                         "type": "text",
-                        "text": "This image contains handwritten LaTeX code. Extract the exact LaTeX source code you see written. Return ONLY the raw LaTeX code, nothing else. No explanations, no markdown, no backticks."
+                        "text": """
+                    This image contains handwritten LaTeX source code.
+
+                    Transcribe it into valid LaTeX.
+
+                    Rules:
+
+                    1. Preserve the document exactly whenever possible.
+                    2. Carefully inspect ONLY the document preamble (everything before \\begin{document}).
+                    3. Verify every \\usepackage command.
+                    4. If a package name is an obvious OCR mistake, automatically correct it.
+                    Examples:
+                    - amsymb -> amssymb
+                    - graphic -> graphicx
+                    - epsfig -> graphicx
+                    5. Do not invent packages.
+                    6. Do not change equations, environments, or any content after \\begin{document}, even if they contain errors.
+                    7. Preserve comments, spacing and formatting.
+                    8. Return ONLY the corrected LaTeX source.
+                    """
                     }
                 ]
             }
